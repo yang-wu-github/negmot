@@ -1,0 +1,14 @@
+---
+title: "negmot"
+output: html_document
+---
+
+```{r}
+library(tidyverse)
+```
+
+```{r}
+d <- read_csv("~/Desktop/Negation_May 1, 2019_02.18.csv")
+```
+
+
