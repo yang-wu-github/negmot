@@ -1,0 +1,221 @@
+---
+title: "190614negmot"
+output: html_document
+---
+
+# Preliminaries
+
+```{r}
+library(tidyverse)
+library(here)
+# library(langcog)
+library(lme4)
+multi_boot_standard <- function(data, col, na.rm = FALSE,
+                                empirical_function,
+                                statistics_functions,
+                                nboot = 1000) {
+  
+  quo_col <- rlang::new_quosure(lazyeval::as_name(col))
+  
+  empirical <- data %>%
+    dplyr::summarise(mean = mean(!!quo_col, na.rm = na.rm))
+  
+  data %>%
+    dplyr::do(data.frame(rbind(
+      Hmisc::smean.cl.boot(.[[col]], B = nboot, na.rm = na.rm)
+    ))) %>%
+    dplyr::select(-Mean) %>%
+    dplyr::rename(ci_lower = Lower, ci_upper = Upper) %>%
+    dplyr::left_join(empirical, by = as.character(dplyr::groups(data)))
+  
+}
+```
+
+```{r}
+d_raw1_proh <- read_csv(here("data/190521Negation_prohibition_cb_June 1, 2019_00.15.csv"))
+d_raw2_proh <- read_csv(here("data/190521Negation_prohibition_June 13, 2019_19.53.csv")) 
+# the two datasets counterbalanced which novel word is yes/no
+d_raw1_nonexist <- read_csv(here("data/190521Negation_nonexistence_May 31, 2019_21.54.csv"))
+d_raw2_nonexist <- read_csv(here("data/190521Negation_nonexistence_cb_June 1, 2019_00.12.csv"))
+d_raw1_denial <- read_csv(here("data/190521Negation_denial_cb_May 31, 2019_19.29.csv"))
+d_raw2_denial <- read_csv(here("data/190521Negation_denial_June 13, 2019_20.43.csv"))
+```
+
+Data cleaning.
+
+```{r}
+d1_proh <- slice(d_raw1_proh, -1:-2) 
+d2_proh <- slice(d_raw2_proh, -1:-2) 
+d_proh <- rbind(d1_proh,d2_proh)  
+d_proh$training <- c("prohibition")
+
+d1_nonexist <- slice(d_raw1_nonexist, -1:-2) 
+d2_nonexist <- slice(d_raw2_nonexist, -1:-2) 
+d_nonexist <- rbind(d1_nonexist,d2_nonexist)  
+d_nonexist$training <- c("nonexistence")
+
+d1_denial <- slice(d_raw1_denial, -1:-2) 
+d2_denial <- slice(d_raw2_denial, -1:-2) 
+d_denial <- rbind(d1_denial, d2_denial)  
+d_denial$training <- c("denial")
+
+d_all <- rbind(d_proh, d_nonexist, d_denial) 
+
+d <- d_all %>%
+  rename(id = `ResponseId`, 
+         status = `Status`, 
+         proh_yes_response = `ProhTouch`, 
+         proh_no_response = `ProhAway`,
+         nonexist_yes_response = `NonexiTruck`, 
+         nonexist_no_response = `NonexiBucket`,
+         denial_yes_response = `DenialZupy`,
+         denial_no_response = `DenialDaxy`,
+         proh_yes_rt = `ProhTouchTime_Page Submit`, 
+         proh_no_rt = `ProhAwayTime_Page Submit`,
+         nonexist_yes_rt = `NonexiTruckTime_Page Submit`, 
+         nonexist_no_rt = `NonexiBucketTime_Page Submit`, 
+         denial_yes_rt = `DenialZupyTime_Page Submit`,
+         denial_no_rt = `DenialDaxyTime_Page Submit`,
+         condition = FL_13_DO) %>%
+  select(id, status, starts_with("proh_"), starts_with("nonexist_"), 
+         starts_with("denial_"), condition, training) %>%
+  filter(status == "IP Address") %>%
+  na.omit %>%
+  mutate(condition = case_when(condition == "Cong" ~ "congruent",
+                               condition == "Incong" ~ "incongruent",
+                               condition == "NoCue" ~ "neutral"), 
+         condition = fct_relevel(condition, "congruent", "neutral")) %>%
+  gather(trial, response, starts_with("proh"), starts_with("nonexist"), starts_with("denial")) %>%
+  separate(trial, into=c("trial_type","word","measure")) %>%
+  spread(measure, response) %>%
+  mutate(training = fct_relevel(training, "prohibition", "nonexistence")) %>%
+  mutate(trial_type = case_when(trial_type == "proh" ~ "prohibition",
+                                trial_type == "nonexist" ~ "nonexistence",
+                                trial_type == "denial" ~ "denial"),
+         trial_type = fct_relevel(trial_type, "prohibition", "nonexistence"),
+          correct = case_when(trial_type == "prohibition" & 
+                                word == "yes" & response == "Touch it" ~ 1, 
+                              trial_type == "prohibition" & 
+                                word == "no" & response == "Stay away" ~ 1, 
+                              trial_type == "nonexistence" & 
+                                word == "no" & response == "Bucket" ~ 1, 
+                              trial_type == "nonexistence" & 
+                                word == "yes" & response == "Truck" ~ 1,
+                              trial_type == "denial" &
+                                word == "yes" & response == "Zupy" ~ 1,
+                              trial_type == "denial" &
+                                word == "no" & response == "Daxy" ~ 1,
+                              TRUE ~ 0), 
+         rt = as.numeric(rt))
+```
+
+# Analysis
+
+## Accuracy 
+
+### Design-based analysis
+
+```{r}
+ms <- d %>%
+  group_by(condition, trial_type, training) %>% 
+  multi_boot_standard(col = "correct")
+
+sp <- ggplot(ms, 
+       aes(x = condition, y = mean, col = trial_type)) + 
+  geom_pointrange(aes(ymin = ci_lower, ymax = ci_upper), 
+                  position = position_dodge(width = .1)) + 
+  geom_hline(yintercept = .5, lty = 2) +
+  ggtitle("training type") +
+  theme(plot.title = element_text(hjust = 0.5)) +
+  ylim(0,1)
+sp + facet_grid(. ~ training)
+```
+
+
+```{r}
+# the model cannot converge.
+# d <- mutate(d, condition = fct_relevel(condition, "neutral"))
+# mod <- glmer(correct ~ condition * trial_type * training + (trial_type | id), 
+#             data = d, 
+#              family = "binomial")
+# summary(mod) 
+# library(brms)
+# brm(correct ~ condition ~ condition * trial_type * training + (trial_type | id), 
+#             data = d, 
+#             family = "binomial")
+```
+## By-word  
+```{r}
+ms <- d %>%
+  group_by(condition, trial_type, word) %>% 
+  multi_boot_standard(col = "correct")
+```
+
+
+```{r}
+ggplot(ms, 
+       aes(x = condition, y = mean, col = word)) + 
+  geom_pointrange(aes(ymin = ci_lower, ymax = ci_upper), 
+                  position = position_dodge(width = .1)) + 
+  facet_wrap(~trial_type) + 
+  geom_hline(yintercept = .5, lty = 2) + 
+  ggtitle("training type") +
+  theme(plot.title = element_text(hjust = 0.5)) +
+  ylim(0,1)
+```
+
+## Reaction time
+
+```{r}
+ggplot(d, aes(x = rt)) + 
+  geom_histogram()
+```
+Exclude outliers and replot. 
+
+Start by clipping > 60 seconds - then apply 3SDs in log space. Note - post hoc decision,.
+
+```{r}
+d$rt[d$rt > 30] <- NA
+lmean <- mean(log(d$rt), na.rm=TRUE)
+lsd <- sd(log(d$rt), na.rm=TRUE)
+d$rt[log(d$rt) > lmean + 3 * lsd] <- NA
+
+qplot(d$rt)
+```
+
+
+
+All RTs.
+
+```{r}
+ms <- d %>%
+  group_by(condition, trial_type, training) %>% 
+  multi_boot_standard(col = "rt", na.rm = TRUE)
+
+sp <- ggplot(ms, 
+       aes(x = condition, y = mean, col = trial_type)) + 
+  geom_pointrange(aes(ymin = ci_lower, ymax = ci_upper), 
+                  position = position_dodge(width = .1)) + 
+  ggtitle("training type") +
+  theme(plot.title = element_text(hjust = 0.5)) +
+  geom_hline(yintercept = .5, lty = 2) 
+sp + facet_grid (. ~training)
+```
+
+Only correct RTs.
+
+```{r}
+ms <- d %>%
+  filter(correct == 1) %>%
+  group_by(condition, trial_type, training) %>% 
+  multi_boot_standard(col = "rt", na.rm = TRUE)
+
+sp <- ggplot(ms, 
+       aes(x = condition, y = mean, col = trial_type)) + 
+       geom_pointrange(aes(ymin = ci_lower, ymax = ci_upper), 
+                  position = position_dodge(width = .1)) + 
+       geom_hline(yintercept = .5, lty = 2) +
+       ggtitle("training type") +
+       theme(plot.title = element_text(hjust = 0.5))
+sp + facet_grid (. ~training)
+```
