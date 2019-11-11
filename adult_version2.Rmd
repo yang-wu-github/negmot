@@ -1,0 +1,150 @@
+---
+title: "negmot: adult_version2"
+output: html_document
+---
+
+# Preliminaries
+
+```{r}
+library(tidyverse)
+library(here)
+library(langcog)
+library(lme4)
+```
+
+```{r}
+d_raw <- read_csv(here("data/adult_version2.csv"))
+```
+
+# Data cleaning.
+
+```{r}
+d <- d_raw %>%
+  slice(-1:-2) %>%
+  rename(id = `ResponseId`, 
+         status = `Status`, 
+         condition = `Emotions`,
+         training = `TrainingType`,
+         cb = `Word`,
+         proh_yes = `ProhTouch`, 
+         proh_no = `ProhAway`,
+         nonexist_yes1 = `NonexiTrTruck`, 
+         nonexist_no1 = `NonexiTrBucket`,
+         denial_yes1 = `DenialDaDaxy`,
+         denial_no1 = `DenialDaZupy`,
+         nonexist_yes2 = `NonexiBuBucket`, 
+         nonexist_no2 = `NonexiBuTruck`,
+         denial_yes2 = `DenialZuZupy`,
+         denial_no2 = `DenialZuDaxy`) %>%
+  filter(catch == "Three", status == "IP Address") %>%
+  select(id, status, training, condition, cb, Bei_meaning, Sha_meaning, 
+         starts_with("proh_"), starts_with("nonexist_"), 
+         starts_with("denial_")) %>%
+  mutate(condition = case_when(condition == "Cong" ~ "congruent",
+                               condition == "Incong" ~ "incongruent",
+                               condition == "Neutral" ~ "neutral"),
+         condition = fct_relevel(condition, "congruent", "neutral")) %>%
+  gather(trial, response, starts_with("proh"), starts_with("nonexist"), starts_with("denial")) %>%
+  separate(trial, into=c("trial_type","word")) %>%
+  na.omit %>%
+  mutate(training = case_when(training == "Proh" ~ "prohibition",
+                              training == "Nonexi" ~ "nonexistence",
+                              training == "Denial" ~ "denial"),
+         training = fct_relevel(training, "prohibition", "nonexistence")) %>%
+  mutate(trial_type = case_when(trial_type == "proh" ~ "prohibition",
+                                trial_type == "nonexist" ~ "nonexistence",
+                                trial_type == "denial" ~ "denial"),
+         trial_type = fct_relevel(trial_type, "prohibition", "nonexistence"),
+         correct = case_when(trial_type == "prohibition" & 
+                                word == "yes" & response == "Touch" ~ 1, 
+                              trial_type == "prohibition" & 
+                                word == "no" & response == "Stay away" ~ 1, 
+                              trial_type == "nonexistence" & 
+                                word == "yes1" & response == "Truck" ~ 1,                            
+                             trial_type == "nonexistence" & 
+                                word == "no1" & response == "Bucket" ~ 1, 
+                              trial_type == "denial" &
+                                word == "yes1" & response == "Daxy" ~ 1,
+                              trial_type == "denial" &
+                                word == "no1" & response == "Zupy" ~ 1,
+                              trial_type == "nonexistence" & 
+                                word == "yes2" & response == "Bucket" ~ 1,                                                         
+                             trial_type == "nonexistence" & 
+                                word == "no2" & response == "Truck" ~ 1, 
+                              trial_type == "denial" &
+                                word == "yes2" & response == "Zupy" ~ 1,
+                              trial_type == "denial" &
+                                word == "no2" & response == "Daxy" ~ 1,
+                              TRUE ~ 0),
+         correct = case_when(cb == "original" & correct == 1 ~ 1,
+                             cb == "original" & correct == 0 ~ 0,
+                             cb == "cb" & correct == 1 ~ 0,
+                             cb == "cb" & correct == 0 ~ 1)) %>%
+  mutate(test = case_when(trial_type == training  ~ "consistent", TRUE ~ "transfer"))%>%
+  na.omit
+```
+
+# Analysis
+
+## Pre-registered analysis (design-based)
+
+We found (1) effect of emotion: congruent = neutral > incongruent, and (2) effect of training type: prohibition = denial > nonexistence
+
+```{r fig.width = 12, fig.height = 6, echo=FALSE}
+ms <- d %>%
+  group_by(condition, trial_type, training) %>% 
+  multi_boot_standard(col = "correct")
+
+sp <- ggplot(ms, 
+       aes(x = condition, y = mean, col = trial_type)) + 
+  geom_pointrange(aes(ymin = ci_lower, ymax = ci_upper), 
+                  position = position_dodge(width = .1)) + 
+  geom_hline(yintercept = .5, lty = 2) +
+  ggtitle("training type") +
+  theme(plot.title = element_text(hjust = 0.5), text = element_text(size = 20)) +
+  ylim(0,1)
+sp + facet_grid(. ~ training)
+```
+
+```{r}
+d <- mutate(d, condition = fct_relevel(condition, "congruent"))
+mod <- glmer(correct ~ condition * trial_type * training + (trial_type | id), 
+            data = d, 
+             family = "binomial")
+summary(mod) 
+```
+## Exploratory analysis 
+### By word  
+We found no word effect. 
+```{r}
+d_word <- d %>%
+    mutate(word = case_when(word == "yes1" ~ "yes",
+                            word == "yes2" ~ "yes",
+                            word == "no1" ~ "no",
+                            word == "no2" ~ "no",
+                            word == "yes" ~ "yes",
+                            word == "no" ~ "no"))
+ms <- d_word %>%
+  group_by(condition, trial_type, word) %>% 
+  multi_boot_standard(col = "correct")
+```
+
+
+```{r fig.width = 12, fig.height = 6, echo=FALSE}
+d_word <- mutate(d_word, word = fct_relevel(word, "yes"))
+ggplot(ms, 
+       aes(x = condition, y = mean, col = word)) + 
+  geom_pointrange(aes(ymin = ci_lower, ymax = ci_upper), 
+                  position = position_dodge(width = .1)) + 
+  facet_wrap(~trial_type) + 
+  geom_hline(yintercept = .5, lty = 2) + 
+  ggtitle("training type") +
+  theme(plot.title = element_text(hjust = 0.5),text = element_text(size = 20)) +
+  ylim(0,1)
+```
+```{r}
+mod <- glmer(correct ~ condition * word * training + (word | id), 
+            data = d_word, 
+             family = "binomial")
+summary(mod) 
+```
